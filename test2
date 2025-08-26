@@ -1,0 +1,1004 @@
+import React, { useState } from 'react';
+import { Plus, Edit2, Trash2, ChevronUp, ChevronDown, Link } from 'lucide-react';
+
+const GanttChartApp = () => {
+    // デフォルト色パレット
+    const colorPalette = [
+        '#3B82F6', // Blue
+        '#10B981', // Green
+        '#F59E0B', // Yellow
+        '#EF4444', // Red
+        '#8B5CF6', // Purple
+        '#06B6D4', // Cyan
+        '#F97316', // Orange
+        '#84CC16'  // Lime
+    ];
+
+    const [tasks, setTasks] = useState([
+        {
+            id: 1,
+            name: '企画',
+            startMonth: '2024-01',
+            endMonth: '2024-03',
+            color: '#3B82F6',
+            dependencies: [],
+            memo: '企画立案と市場調査',
+            scheduleMode: 'fixed',
+            duration: 3,
+            startDate: '1/10',
+            endDate: '3/20'
+        },
+        {
+            id: 2,
+            name: '開発',
+            startMonth: '2024-03',
+            endMonth: '2024-07',
+            color: '#10B981',
+            dependencies: [],
+            memo: 'システム開発とテスト',
+            scheduleMode: 'fixed',
+            duration: 5,
+            startDate: '3/25',
+            endDate: '7/15'
+        },
+        {
+            id: 3,
+            name: 'リリース',
+            startMonth: '2024-07',
+            endMonth: '2024-08',
+            color: '#F59E0B',
+            dependencies: [],
+            memo: '本番環境への展開',
+            scheduleMode: 'fixed',
+            duration: 2,
+            startDate: '7/20',
+            endDate: '8/31'
+        }
+    ]);
+
+    const [editingTask, setEditingTask] = useState(null);
+    const [showAddForm, setShowAddForm] = useState(false);
+    const [newTask, setNewTask] = useState({
+        name: '',
+        startMonth: '2024-01',
+        endMonth: '2024-02',
+        color: colorPalette[0],
+        dependencies: [],
+        memo: '',
+        scheduleMode: 'fixed',
+        duration: 1,
+        startDate: '',
+        endDate: ''
+    });
+
+    // 月の範囲を計算
+    const getMonthRange = () => {
+        if (tasks.length === 0) return [];
+
+        const allMonths = tasks.flatMap(task => [task.startMonth, task.endMonth]);
+        const minMonth = allMonths.reduce((min, month) => month < min ? month : min);
+        const maxMonth = allMonths.reduce((max, month) => month > max ? month : max);
+
+        const months = [];
+        let current = new Date(minMonth + '-01');
+        const end = new Date(maxMonth + '-01');
+
+        while (current <= end) {
+            const monthStr = current.getFullYear() + '-' + String(current.getMonth() + 1).padStart(2, '0');
+            months.push(monthStr);
+            current.setMonth(current.getMonth() + 1);
+        }
+        return months;
+    };
+
+    const months = getMonthRange();
+
+    // 月の位置を計算
+    const getMonthPosition = (month) => {
+        const index = months.indexOf(month);
+        return index * 35; // 各月35px幅
+    };
+
+    // タスクの期間幅を計算
+    const getTaskWidth = (startMonth, endMonth) => {
+        const startIndex = months.indexOf(startMonth);
+        const endIndex = months.indexOf(endMonth);
+        return (endIndex - startIndex + 1) * 35; // 35px幅
+    };
+
+    // 月を加算する関数
+    const addMonths = (dateString, monthsToAdd) => {
+        const [year, month] = dateString.split('-').map(Number);
+        const date = new Date(year, month - 1); // 月は0ベースなので-1
+        date.setMonth(date.getMonth() + monthsToAdd);
+        return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+    };
+
+    // 期間ベースのタスクの日程を自動計算
+    const calculateSchedule = (tasksToCalculate) => {
+        const calculatedTasks = [...tasksToCalculate];
+
+        // 依存関係の順序でソート(依存がないものから)
+        const sortedTasks = [];
+        const remaining = [...calculatedTasks];
+
+        while (remaining.length > 0) {
+            const independentTasks = remaining.filter(task =>
+                !task.dependencies.some(depId => remaining.find(t => t.id === depId))
+            );
+
+            if (independentTasks.length === 0) break; // 循環依存の場合
+
+            sortedTasks.push(...independentTasks);
+            independentTasks.forEach(task => {
+                const index = remaining.findIndex(t => t.id === task.id);
+                remaining.splice(index, 1);
+            });
+        }
+
+        // 日程を計算
+        sortedTasks.forEach(task => {
+            if (task.scheduleMode === 'duration') {
+                let startMonth;
+                if (task.dependencies.length === 0) {
+                    // 依存なしの場合は2024-01から開始
+                    startMonth = '2024-01';
+                } else {
+                    // 依存がある場合は最後の依存タスクの終了月の翌月
+                    const latestEndMonth = task.dependencies
+                        .map(depId => calculatedTasks.find(t => t.id === depId)?.endMonth)
+                        .filter(Boolean)
+                        .sort()
+                        .pop();
+
+                    if (latestEndMonth) {
+                        startMonth = addMonths(latestEndMonth, 1);
+                    } else {
+                        // 依存タスクが見つからない場合はデフォルトで2024-01
+                        startMonth = '2024-01';
+                    }
+                }
+
+                const endMonth = addMonths(startMonth, task.duration - 1);
+
+                const taskIndex = calculatedTasks.findIndex(t => t.id === task.id);
+                if (taskIndex !== -1) {
+                    calculatedTasks[taskIndex] = {
+                        ...calculatedTasks[taskIndex],
+                        startMonth,
+                        endMonth
+                    };
+                }
+            }
+        });
+        return calculatedTasks;
+    };
+
+    // タスクを追加
+    const addTask = (taskData) => {
+        const id = Math.max(...tasks.map(t => t.id), 0) + 1;
+        const newTasks = [...tasks, { ...taskData, id }];
+        const calculatedTasks = calculateSchedule(newTasks);
+        setTasks(calculatedTasks);
+        setNewTask({
+            name: '',
+            startMonth: '2024-01',
+            endMonth: '2024-02',
+            color: colorPalette[0],
+            dependencies: [],
+            memo: '',
+            scheduleMode: 'fixed',
+            duration: 1,
+            startDate: '',
+            endDate: ''
+        });
+        setShowAddForm(false);
+    };
+
+    // タスクを編集
+    const updateTask = (id, updatedTask) => {
+        const newTasks = tasks.map(task => task.id === id ? { ...task, ...updatedTask } : task);
+        const calculatedTasks = calculateSchedule(newTasks);
+        setTasks(calculatedTasks);
+        setEditingTask(null);
+    };
+
+    // タスクを削除
+    const deleteTask = (id) => {
+        let newTasks = tasks.filter(task => task.id !== id);
+        // 依存関係も削除
+        newTasks = newTasks.map(task => ({
+            ...task,
+            dependencies: task.dependencies.filter(depId => depId !== id)
+        }));
+        const calculatedTasks = calculateSchedule(newTasks);
+        setTasks(calculatedTasks);
+    };
+
+    // タスクの順序を変更
+    const moveTask = (id, direction) => {
+        const currentIndex = tasks.findIndex(task => task.id === id);
+        if (currentIndex === -1) return;
+
+        const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+        if (newIndex < 0 || newIndex >= tasks.length) return;
+
+        const newTasks = [...tasks];
+        [newTasks[currentIndex], newTasks[newIndex]] = [newTasks[newIndex], newTasks[currentIndex]];
+        setTasks(newTasks);
+    };
+
+    // 月数を計算する関数(CSVエクスポートで使用)
+    const getMonthCount = (startMonth, endMonth) => {
+        const startIndex = months.indexOf(startMonth);
+        const endIndex = months.indexOf(endMonth);
+        return endIndex - startIndex + 1;
+    };
+
+    // ガントチャートを画像として出力
+    const exportGanttChart = () => {
+        const svgElement = document.querySelector('#gantt-svg');
+        if (!svgElement) {
+            alert('ガントチャートが見つかりません');
+            return;
+        }
+
+        // SVGを文字列として取得し、必要なスタイルを追加
+        let svgString = new XMLSerializer().serializeToString(svgElement);
+        // SVGにフォント情報を追加(ブラウザに依存しないように)
+        svgString = svgString.replace('<svg', '<svg style="font-family: Arial, sans-serif; background: white;"');
+
+        // Canvasを作成してSVGを描画
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // SVGのサイズを取得
+        const svgRect = svgElement.getBoundingClientRect();
+        canvas.width = svgRect.width * 2; // 高解像度のために2倍
+        canvas.height = svgRect.height * 2;
+        ctx.scale(2, 2); // スケールを2倍に
+
+        // 背景を白で塗りつぶし
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, svgRect.width, svgRect.height);
+
+        // SVGをimageとして読み込み
+        const img = new Image();
+        const svgBlob = new Blob([svgString], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(svgBlob);
+
+        img.onload = function () {
+            ctx.drawImage(img, 0, 0);
+
+            // PNGとして出力
+            canvas.toBlob(function (blob) {
+                const downloadUrl = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = downloadUrl;
+                link.download = 'gantt-chart.png';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(downloadUrl);
+                URL.revokeObjectURL(url);
+            }, 'image/png');
+        };
+
+        img.onerror = function () {
+            // フォールバック:SVGとして出力
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'gantt-chart.svg';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        };
+
+        img.src = url;
+    };
+
+    // 視覚的なガントチャート形式でCSV出力
+    const exportToSpreadsheet = () => {
+        if (tasks.length === 0) return;
+
+        // 全ての月を取得してソート
+        const allMonths = months.sort();
+
+        // ヘッダー行を作成
+        const headers = ['タスク名', '期間', 'メモ', ...allMonths];
+
+        // 各タスクを行として処理
+        const rows = tasks.map(task => {
+            const row = [
+                task.name,
+                `${task.startMonth} ~ ${task.endMonth}${task.startDate || task.endDate ? ` (${task.startDate || ''}~${task.endDate || ''})` : ''}`,
+                task.memo || ''
+            ];
+
+            // 各月について、タスクが該当するかチェック
+            allMonths.forEach(month => {
+                const startIndex = allMonths.indexOf(task.startMonth);
+                const endIndex = allMonths.indexOf(task.endMonth);
+                const currentIndex = allMonths.indexOf(month);
+
+                if (currentIndex >= startIndex && currentIndex <= endIndex) {
+                    // タスクが該当する月には色を表現する文字を使用
+                    if (currentIndex === startIndex && currentIndex === endIndex) {
+                        row.push('●'); // 1ヶ月のタスク
+                    } else if (currentIndex === startIndex) {
+                        row.push('◀■'); // 開始月
+                    } else if (currentIndex === endIndex) {
+                        row.push('■►'); // 終了月
+                    } else {
+                        row.push('■■'); // 中間月
+                    }
+                } else {
+                    row.push(''); // 該当しない月は空白
+                }
+            });
+            return row;
+        });
+
+        // 依存関係の情報を追加する行
+        const dependencyRows = [];
+        dependencyRows.push(['']); // 空行
+        dependencyRows.push(['依存関係:', '', '', ...allMonths.map(() => '')]);
+
+        tasks.forEach(task => {
+            if (task.dependencies.length > 0) {
+                const depNames = task.dependencies
+                    .map(depId => tasks.find(t => t.id === depId)?.name || '')
+                    .filter(name => name)
+                    .join(' → ');
+                dependencyRows.push([`${depNames} → ${task.name}`, '', '', ...allMonths.map(() => '')]);
+            }
+        });
+
+        // 凡例を追加
+        const legendRows = [
+            [''],
+            ['凡例:'],
+            ['● = 1ヶ月タスク', '', '', ...allMonths.map(() => '')],
+            ['◀■ = 開始月', '', '', ...allMonths.map(() => '')],
+            ['■■ = 実行中', '', '', ...allMonths.map(() => '')],
+            ['■► = 終了月', '', '', ...allMonths.map(() => '')]
+        ];
+
+        // 全ての行を結合
+        const allRows = [headers, ...rows, ...dependencyRows, ...legendRows];
+
+        // CSV文字列を作成
+        const csvContent = allRows
+            .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+            .join('\n');
+
+        // BOM付きUTF-8でエンコード
+        const bom = '\uFEFF';
+        const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+
+        // ダウンロード
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'visual-gantt-chart.csv';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    // 依存関係の線を描画
+    const renderDependencyLines = () => {
+        const lines = [];
+        tasks.forEach((task, taskIndex) => {
+            if (task.dependencies && task.dependencies.length > 0) {
+                task.dependencies.forEach(depId => {
+                    const depTask = tasks.find(t => t.id === depId);
+                    if (!depTask) return;
+
+                    const depIndex = tasks.findIndex(t => t.id === depId);
+
+                    // バーの中央のY座標（バーはy+6の位置にあり、高さは28pxなので中央はy+20）
+                    const fromY = 35 + (depIndex * 40) + 20;
+                    const toY = 35 + (taskIndex * 40) + 20;
+
+                    // 依存元タスクのバーの右端のX座標
+                    const fromX = 100 + getMonthPosition(depTask.startMonth) + getTaskWidth(depTask.startMonth, depTask.endMonth);
+                    // 依存先タスクのバーの左端のX座標
+                    const toX = 100 + getMonthPosition(task.startMonth);
+
+                    lines.push(
+                        <g key={`dep-${task.id}-${depId}`}>
+                            <line
+                                x1={fromX}
+                                y1={fromY}
+                                x2={toX - 5}
+                                y2={toY}
+                                stroke="#9CA3AF"
+                                strokeWidth="1"
+                                strokeDasharray="3,3"
+                                markerEnd="url(#arrowhead)"
+                            />
+                        </g>
+                    );
+                });
+            }
+        });
+        return lines;
+    };
+
+    const TaskForm = ({ task, onSave, onCancel }) => {
+        const [formData, setFormData] = useState({
+            ...task,
+            scheduleMode: task.scheduleMode || 'fixed',
+            duration: task.duration || 1,
+            startDate: task.startDate || '',
+            endDate: task.endDate || ''
+        });
+
+        return (
+            <div className="bg-gray-50 p-4 rounded mb-2">
+                <div className="grid grid-cols-1 gap-4 mb-4">
+                    <div>
+                        <label className="block text-sm font-medium mb-1">タスク名</label>
+                        <input
+                            type="text"
+                            value={formData.name}
+                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                            className="w-full p-2 border rounded"
+                            placeholder="タスク名を入力"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1">色</label>
+                        <div className="flex gap-2">
+                            {colorPalette.map((color) => (
+                                <button
+                                    key={color}
+                                    type="button"
+                                    onClick={() => setFormData({ ...formData, color })}
+                                    className={`w-8 h-8 rounded border-2 ${formData.color === color ? 'border-gray-800' : 'border-gray-300'}`}
+                                    style={{ backgroundColor: color }}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1">期間設定方法</label>
+                        <div className="flex gap-4">
+                            <label className="flex items-center">
+                                <input
+                                    type="radio"
+                                    value="fixed"
+                                    checked={formData.scheduleMode === 'fixed'}
+                                    onChange={(e) => setFormData({ ...formData, scheduleMode: e.target.value, dependencies: [] })}
+                                    className="mr-2"
+                                />
+                                <span className="text-sm">開始・終了時期を指定</span>
+                            </label>
+                            <label className="flex items-center">
+                                <input
+                                    type="radio"
+                                    value="duration"
+                                    checked={formData.scheduleMode === 'duration'}
+                                    onChange={(e) => setFormData({ ...formData, scheduleMode: e.target.value })}
+                                    className="mr-2"
+                                />
+                                <span className="text-sm">期間のみ設定(前項目完了後に開始)</span>
+                            </label>
+                        </div>
+                    </div>
+                    {/* 依存タスクの選択(期間設定が'duration'の場合のみ表示) */}
+                    {formData.scheduleMode === 'duration' && tasks.filter(t => t.id !== (task.id || 0)).length > 0 && (
+                        <div>
+                            <label className="block text-sm font-medium mb-1">依存タスク(前工程)</label>
+                            <div className="space-y-1">
+                                <label className="flex items-center">
+                                    <input
+                                        type="radio"
+                                        name={`dependency-${task.id || 'new'}`}
+                                        checked={!formData.dependencies || formData.dependencies.length === 0}
+                                        onChange={() => setFormData({ ...formData, dependencies: [] })}
+                                        className="mr-2"
+                                    />
+                                    <span className="text-sm">なし</span>
+                                </label>
+                                {tasks.filter(t => t.id !== (task.id || 0)).map(t => (
+                                    <label key={t.id} className="flex items-center">
+                                        <input
+                                            type="radio"
+                                            name={`dependency-${task.id || 'new'}`}
+                                            checked={formData.dependencies && formData.dependencies.includes(t.id)}
+                                            onChange={() => setFormData({ ...formData, dependencies: [t.id] })}
+                                            className="mr-2"
+                                        />
+                                        <span className="text-sm">{t.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {formData.scheduleMode === 'fixed' ? (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-1">開始年月</label>
+                                <div className="flex gap-1">
+                                    <select
+                                        value={formData.startMonth.split('-')[0]}
+                                        onChange={(e) => {
+                                            const month = formData.startMonth.split('-')[1];
+                                            setFormData({ ...formData, startMonth: `${e.target.value}-${month}` });
+                                        }}
+                                        className="flex-1 p-2 border rounded"
+                                    >
+                                        {Array.from({ length: 10 }, (_, i) => 2024 + i).map(year => (
+                                            <option key={year} value={year}>{year}年</option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={formData.startMonth.split('-')[1]}
+                                        onChange={(e) => {
+                                            const year = formData.startMonth.split('-')[0];
+                                            setFormData({ ...formData, startMonth: `${year}-${e.target.value}` });
+                                        }}
+                                        className="flex-1 p-2 border rounded"
+                                    >
+                                        {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(month => (
+                                            <option key={month} value={month}>{month}月</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-1">終了年月</label>
+                                <div className="flex gap-1">
+                                    <select
+                                        value={formData.endMonth.split('-')[0]}
+                                        onChange={(e) => {
+                                            const month = formData.endMonth.split('-')[1];
+                                            setFormData({ ...formData, endMonth: `${e.target.value}-${month}` });
+                                        }}
+                                        className="flex-1 p-2 border rounded"
+                                    >
+                                        {Array.from({ length: 10 }, (_, i) => 2024 + i).map(year => (
+                                            <option key={year} value={year}>{year}年</option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={formData.endMonth.split('-')[1]}
+                                        onChange={(e) => {
+                                            const year = formData.endMonth.split('-')[0];
+                                            setFormData({ ...formData, endMonth: `${year}-${e.target.value}` });
+                                        }}
+                                        className="flex-1 p-2 border rounded"
+                                    >
+                                        {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).map(month => (
+                                            <option key={month} value={month}>{month}月</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="w-32">
+                            <label className="block text-sm font-medium mb-1">期間(ヶ月)</label>
+                            <input
+                                type="number"
+                                min="1"
+                                max="60"
+                                value={formData.duration || 1}
+                                onChange={(e) => setFormData({ ...formData, duration: parseInt(e.target.value) || 1 })}
+                                className="w-full p-2 border rounded"
+                                placeholder="期間"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">
+                                依存関係がある場合は前工程終了後から開始されます
+                            </p>
+                        </div>
+                    )}
+                </div>
+                <div className="mb-4">
+                    <label className="block text-sm font-medium mb-1">メモ・備考</label>
+                    <textarea
+                        value={formData.memo || ''}
+                        onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
+                        className="w-full p-2 border rounded h-20"
+                        placeholder="備考やメモを入力してください"
+                    />
+                </div>
+                <div className="mb-4">
+                    <label className="block text-sm font-medium mb-1">具体的な日付(任意)</label>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs text-gray-600 mb-1">開始日</label>
+                            <input
+                                type="text"
+                                value={formData.startDate || ''}
+                                onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                                className="w-full p-2 border rounded text-sm"
+                                placeholder="例: 7/20"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-600 mb-1">終了日</label>
+                            <input
+                                type="text"
+                                value={formData.endDate || ''}
+                                onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                                className="w-full p-2 border rounded text-sm"
+                                placeholder="例: 8/15"
+                            />
+                        </div>
+                    </div>
+                </div>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => onSave(formData)}
+                        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                        保存
+                    </button>
+                    <button
+                        onClick={onCancel}
+                        className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                    >
+                        キャンセル
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <div className="p-6 max-w-full">
+            <h1 className="text-2xl font-bold mb-2">簡易ガントチャート</h1>
+
+            {/* タスク追加ボタン */}
+            <div className="mb-6">
+                {!showAddForm ? (
+                    <button
+                        onClick={() => setShowAddForm(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                    >
+                        <Plus size={16} />
+                        タスクを追加
+                    </button>
+                ) : (
+                    <TaskForm
+                        task={newTask}
+                        onSave={addTask}
+                        onCancel={() => setShowAddForm(false)}
+                    />
+                )}
+            </div>
+
+            {/* タスクリストと編集フォーム */}
+            <div className="mb-6">
+                {tasks.map((task, index) => (
+                    <div key={task.id} className="mb-2">
+                        {editingTask === task.id ? (
+                            <TaskForm
+                                task={task}
+                                onSave={(updatedTask) => updateTask(task.id, updatedTask)}
+                                onCancel={() => setEditingTask(null)}
+                            />
+                        ) : (
+                            <div className="flex items-center justify-between p-3 bg-white border rounded">
+                                <div className="flex items-center gap-3">
+                                    <div
+                                        className="w-4 h-4 rounded"
+                                        style={{ backgroundColor: task.color }}
+                                    ></div>
+                                    <span className="font-medium">{task.name}</span>
+                                    <span className="text-sm text-gray-500">
+                                        {task.startMonth} ~ {task.endMonth}
+                                    </span>
+                                    {/* 具体的な日付を強調表示 */}
+                                    {(task.startDate || task.endDate) ? (
+                                        <span className="ml-2 px-2 py-1 bg-green-100 text-green-800 text-xs rounded font-semibold">
+                                            {task.startDate}{task.startDate && task.endDate ? '~' : ''}{task.endDate}
+                                        </span>
+                                    ) : null}
+
+                                    {task.scheduleMode === 'duration' && (
+                                        <span className="ml-2 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
+                                            前項目完了後に開始
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={() => moveTask(task.id, 'up')}
+                                        disabled={index === 0}
+                                        className="p-1 text-gray-500 hover:text-gray-700 disabled:opacity-30"
+                                    >
+                                        <ChevronUp size={16} />
+                                    </button>
+                                    <button
+                                        onClick={() => moveTask(task.id, 'down')}
+                                        disabled={index === tasks.length - 1}
+                                        className="p-1 text-gray-500 hover:text-gray-700 disabled:opacity-30"
+                                    >
+                                        <ChevronDown size={16} />
+                                    </button>
+                                    <button
+                                        onClick={() => setEditingTask(task.id)}
+                                        className="p-1 text-blue-500 hover:text-blue-700"
+                                    >
+                                        <Edit2 size={16} />
+                                    </button>
+                                    <button
+                                        onClick={() => deleteTask(task.id)}
+                                        className="p-1 text-red-500 hover:text-red-700"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+
+            {/* ガントチャート */}
+            {tasks.length > 0 && (
+                <div className="border rounded-lg p-4 bg-white overflow-x-auto">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-lg font-semibold">ガントチャート</h2>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={exportGanttChart}
+                                className="px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 flex items-center gap-2 text-sm"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M21 15V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M7 10L12 15L17 10" stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M12 15V3" stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                                PNG出力
+                            </button>
+                            <button
+                                onClick={exportToSpreadsheet}
+                                className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-2 text-sm"
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M14 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V8L14 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M14 2V8H20" stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M16 13H8" stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M16 17H8" stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M10 9H9H8" stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                                視覚的CSV出力
+                            </button>
+                        </div>
+                    </div>
+                    <div style={{ minWidth: months.length * 35 + 350 }}>
+                        <svg id="gantt-svg" width={months.length * 35 + 350} height={(tasks.length + 1) * 40 + 35}>
+                            {/* 背景 */}
+                            <rect width="100%" height="100%" fill="white" />
+                            
+                            {/* 年のヘッダー */}
+                            {(() => {
+                                const years = [...new Set(months.map(month => month.split('-')[0]))];
+                                let currentX = 100;
+                                return years.map((year) => {
+                                    const yearMonths = months.filter(month => month.startsWith(year));
+                                    const yearWidth = yearMonths.length * 35;
+                                    const result = (
+                                        <g key={`year-${year}`}>
+                                            <rect
+                                                y={0}
+                                                x={currentX}
+                                                width={yearWidth}
+                                                height={20}
+                                                fill="#E5E7EB"
+                                                stroke="#D1D5DB"
+                                            />
+                                            <text
+                                                x={currentX + yearWidth / 2}
+                                                y={14}
+                                                textAnchor="middle"
+                                                fontSize="13"
+                                                fontWeight="bold"
+                                                fill="#1F2937"
+                                            >
+                                                {year}年
+                                            </text>
+                                        </g>
+                                    );
+                                    currentX += yearWidth;
+                                    return result;
+                                });
+                            })()}
+                            
+                            {/* メモヘッダー */}
+                            <rect
+                                x={100 + months.length * 35}
+                                y={0}
+                                width={250}
+                                height={20}
+                                fill="#E5E7EB"
+                                stroke="#D1D5DB"
+                            />
+                            <text
+                                x={100 + months.length * 35 + 125}
+                                y={14}
+                                textAnchor="middle"
+                                fontSize="13"
+                                fontWeight="bold"
+                                fill="#1F2937"
+                            >
+                                メモ・備考
+                            </text>
+                            
+                            {/* 月のヘッダー */}
+                            {months.map((month, index) => (
+                                <g key={month}>
+                                    <rect
+                                        x={100 + index * 35}
+                                        y={20}
+                                        width={35}
+                                        height={15}
+                                        fill="#F3F4F6"
+                                        stroke="#D1D5DB"
+                                    />
+                                    <text
+                                        x={100 + index * 35 + 17.5}
+                                        y={30}
+                                        textAnchor="middle"
+                                        fontSize="10"
+                                        fill="#1F2937"
+                                        fontWeight="500"
+                                    >
+                                        {month.split('-')[1]}月
+                                    </text>
+                                </g>
+                            ))}
+                            
+                            {/* メモ欄のヘッダー下部分 */}
+                            <rect
+                                x={100 + months.length * 35}
+                                y={20}
+                                width={250}
+                                height={15}
+                                fill="#F3F4F6"
+                                stroke="#D1D5DB"
+                            />
+
+                            {/* タスクバー */}
+                            {tasks.map((task, index) => {
+                                const y = 35 + (index * 40);
+                                const x = 100 + getMonthPosition(task.startMonth);
+                                const width = getTaskWidth(task.startMonth, task.endMonth);
+                                const hasDependencies = task.dependencies && task.dependencies.length > 0;
+                                const isDependendedOn = tasks.some(t => t.dependencies && t.dependencies.includes(task.id));
+
+                                return (
+                                    <g key={task.id}>
+                                        {/* タスク名 */}
+                                        <text
+                                            x={90}
+                                            y={y + 20}
+                                            textAnchor="end"
+                                            fontSize="11"
+                                            fill="#374151"
+                                        >
+                                            {task.name}
+                                        </text>
+                                        
+                                        {/* タスクバー - 行内中央配置 */}
+                                        <rect
+                                            x={x}
+                                            y={y + 6}
+                                            width={width}
+                                            height={28}
+                                            fill={task.color}
+                                            rx={4}
+                                        />
+                                        
+                                        {/* 前工程がある場合:バーの左端に三角マーク */}
+                                        {hasDependencies && (
+                                            <polygon
+                                                points={`${x - 4},${y + 13} ${x - 4},${y + 27} ${x + 2},${y + 20}`}
+                                                fill="#374151"
+                                            />
+                                        )}
+                                        
+                                        {/* 後工程がある場合:バーの右端ギリギリに丸マーク */}
+                                        {isDependendedOn && (
+                                            <circle
+                                                cx={x + width - 1}
+                                                cy={y + 20}
+                                                r="3"
+                                                fill="#374151"
+                                            />
+                                        )}
+
+                                        {/* 開始日・終了日の表示 - 行内中央配置 */}
+                                        {width > 30 && task.startDate && (
+                                            <text
+                                                x={x + 4}
+                                                y={y + 20}
+                                                textAnchor="start"
+                                                fontSize="11"
+                                                fill="white"
+                                                fontWeight="bold"
+                                            >
+                                                {task.startDate}
+                                            </text>
+                                        )}
+                                        {width > 30 && task.endDate && (
+                                            <text
+                                                x={x + width - 4}
+                                                y={y + 20}
+                                                textAnchor="end"
+                                                fontSize="11"
+                                                fill="white"
+                                                fontWeight="bold"
+                                            >
+                                                {task.endDate}
+                                            </text>
+                                        )}
+
+                                        {/* メモ欄の背景 - 行内中央配置 */}
+                                        <rect
+                                            x={100 + months.length * 35}
+                                            y={y + 6}
+                                            width={250}
+                                            height={28}
+                                            fill="#FEFEFE"
+                                            stroke="#D1D5DB"
+                                        />
+                                        
+                                        {/* メモテキスト - 行内中央配置 */}
+                                        <text
+                                            x={100 + months.length * 35 + 8}
+                                            y={y + 21}
+                                            fontSize="10"
+                                            fill="#1F2937"
+                                        >
+                                            {task.memo && task.memo.length > 32 ? task.memo.substring(0, 32) + '...' :
+                                                task.memo || ''}
+                                        </text>
+                                        
+                                        {/* グリッド線 */}
+                                        <line
+                                            x1={0}
+                                            y1={y + 34}
+                                            x2={100 + months.length * 35 + 250}
+                                            y2={y + 34}
+                                            stroke="#E5E7EB"
+                                            strokeWidth={0.5}
+                                        />
+                                    </g>
+                                );
+                            })}
+                            
+                            {/* 依存関係の線 */}
+                            {renderDependencyLines()}
+                            
+                            {/* 矢印の定義 */}
+                            <defs>
+                                <marker id="arrowhead" markerWidth="10" markerHeight="7"
+                                        refX="10" refY="3.5" orient="auto">
+                                    <polygon points="0 0, 10 3.5, 0 7" fill="#9CA3AF" />
+                                </marker>
+                            </defs>
+                        </svg>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default GanttChartApp;
